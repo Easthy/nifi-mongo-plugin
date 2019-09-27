@@ -159,8 +159,12 @@ class MongoWrapper {
     return context.getProperty(CONNECTION_SOURCE).getValue();
   }
 
-  public String getMongoHost(final ProcessContext context) {
-    return context.getProperty(MONGO_HOST).getValue();
+  public String[] getMongoHost(final ProcessContext context) {
+    final String[] mongoHost = context.getProperty(MONGO_HOST).getValue().trim().split(":");
+    if (mongoHost.length != 2) {
+      throw new ArrayIndexOutOfBoundsException("Not in host:port format");
+    }
+    return mongoHost;
   }
 
   public String getDatabaseName(final ProcessContext context) {
@@ -246,10 +250,10 @@ class MongoWrapper {
           if (authSource != null){
             database = authSource;
           }
-          String[] mongoServer = this.getMongoHost(context).trim().split(":");
+          String[] mongoHost = this.getMongoHost(context);
           MongoCredential credential = MongoCredential.createCredential(username, database, password);
-          mongoClient = new MongoClient(new ServerAddress(mongoServer[0], 
-                                                          Integer.parseInt(mongoServer[1])), 
+          mongoClient = new MongoClient(new ServerAddress(mongoHost[0], 
+                                                          Integer.parseInt(mongoHost[1])), 
                                         Arrays.asList(credential));
         } else {
           mongoClient = new MongoClient(new MongoClientURI(uri));

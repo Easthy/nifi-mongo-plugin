@@ -163,17 +163,6 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
           if(dbName.equals(namespace[0])) {
             FlowFile flowFile = session.create();
             Document oDoc = currentDoc.get("o", Document.class);
-            Document o2Doc = currentDoc.get("o2", Document.class);
-            String before = null;
-            String after = null;
-            if (oDoc != null) {
-              after = oDoc.toJson();
-            }
-            if (o2Doc != null) {
-              before = o2Doc.toJson();
-            }
-            // logger.info("before: " + before.toString());
-            // logger.info("after: " + after.toString());
 
             String h = Long.toString(currentDoc.getLong("h"));
             flowFile = session.putAttribute(flowFile, "mime.type", "application/json");
@@ -189,11 +178,8 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
             record.put("db", dbName);
             record.put("ts", currentDoc.get("ts", BsonTimestamp.class).getTime());
             record.put("op", currentDoc.getString("op"));
-            record.put("after", after);
-            record.put("before", before);
-
-            logger.info("oDocoDocoDocoDocoDoc");
-            logger.info(record.toString());
+            record.put("_id", getId(currentDoc));
+            record.put("changes", oDoc.toJson().toString());
 
             flowFile = session.write(flowFile, new OutputStreamCallback() {
               @Override
