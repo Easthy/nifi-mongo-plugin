@@ -28,8 +28,11 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.TimeUnit;
+import org.apache.nifi.expression.ExpressionLanguageScope;
+
 /**
- * Created by hayshutton on 8/6/16.
+ * Created on 09.2019.
  */
 class MongoWrapper {
   private static final Logger logger = LoggerFactory.getLogger(MongoWrapper.class);
@@ -98,6 +101,19 @@ class MongoWrapper {
           .required(false)
           .addValidator(Validator.VALID)
           .build();
+
+  public static final PropertyDescriptor STATE_UPDATE_INTERVAL = new PropertyDescriptor.Builder()
+          .name("capture-change-mongo-state-update-interval")
+          .displayName("State Update Interval")
+          .description("Indicates how often to update the processor's state with oplog file/position values. A value of zero means that state will only be updated when the processor is "
+                  + "stopped or shutdown. If at some point the processor state does not contain the desired oplog values, the last flow file emitted will contain the last observed values, "
+                  + "and the processor can be returned to that state by using the Initial Oplog File, Initial Oplog Position, and Initial Sequence ID properties.")
+          .defaultValue("0 seconds")
+          .required(true)
+          .addValidator(StandardValidators.TIME_PERIOD_VALIDATOR)
+          .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
+          .build();
+
   private static final PropertyDescriptor SSL_CONTEXT_SERVICE = new PropertyDescriptor.Builder()
           .name("ssl-context-service")
           .displayName("SSL Context Service")
@@ -142,6 +158,7 @@ class MongoWrapper {
     descriptors.add(USERNAME);
     descriptors.add(PASSWORD);
     descriptors.add(WHITE_LIST_COLLECTION_NAMES);
+    descriptors.add(STATE_UPDATE_INTERVAL);
     descriptors.add(SSL_CONTEXT_SERVICE);
     descriptors.add(CLIENT_AUTH);
   }
@@ -153,6 +170,10 @@ class MongoWrapper {
     builder.sslEnabled(true);
     builder.socketFactory(sslContext.getSocketFactory());
     return builder;
+  }
+
+  public Long getStateUpdateInterval(final ProcessContext context) {
+    return context.getProperty(STATE_UPDATE_INTERVAL).evaluateAttributeExpressions().asTimePeriod(TimeUnit.MILLISECONDS);
   }
 
   public String getConnectionSource(final ProcessContext context) {
