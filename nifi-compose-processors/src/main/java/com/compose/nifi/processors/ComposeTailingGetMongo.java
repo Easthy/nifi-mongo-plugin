@@ -61,7 +61,10 @@ import org.apache.nifi.processor.exception.ProcessException;
         + "that it can continue from the same location if restarted.")
 public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
   private static final Logger logger = LoggerFactory.getLogger(ComposeTailingGetMongo.class);
-  private static final Relationship REL_SUCCESS = new Relationship.Builder().name("success").description("the happy path for mongo documents and operations").build();
+  private static final Relationship REL_SUCCESS = new Relationship.Builder()
+                  .name("success")
+                  .description("Successfully created FlowFile from oplog.")
+                  .build();
 
   private static final Set<Relationship> relationships;
 
@@ -132,21 +135,23 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
   }
 
   @OnStopped
-  public final void closeClient() {
-    mongoWrapper.closeClient();
+  public final void closeClient(ProcessContext context) {
+    StateManager stateManager = context.getStateManager();
+    stop(stateManager);
   }
 
   @Override
   public final void onTrigger(final ProcessContext context, final ProcessSessionFactory sessionFactory) {
+    hasRun.set(true);
     ComponentLog log = getLogger();
     StateManager stateManager = context.getStateManager();
 
-    if (currentSession == null) {
-      currentSession = sessionFactory.createSession();
-    }
+    // if (currentSession == null) {
+    //   currentSession = sessionFactory.createSession();
+    // }
 
     try {
-      outputEvents(context, currentSession, stateManager, log);
+      outputEvents(context, sessionFactory, stateManager, log);
     } catch (IOException ioe) {
       try {
         stop(stateManager);
@@ -164,14 +169,13 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
       long timeSinceLastUpdate = now - lastStateUpdate;
 
       if (stateUpdateInterval != 0 && timeSinceLastUpdate >= stateUpdateInterval) {
-        logger.info("Saving new check point. Oplog entry timestamp: {}", String.valueOf(lastOplogTimestamp));
+        logger.info("Saving new check point with timestamp: {}", String.valueOf(lastOplogTimestamp));
         updateState(stateManager, lastOplogTimestamp);
         lastStateUpdate = now;
       }
   }
 
-  public void outputEvents(final ProcessContext context, ProcessSession session, StateManager stateManager, ComponentLog log) throws IOException {
-    long ts = new Date().getTime();
+  public void outputEvents(final ProcessContext context, ProcessSessionFactory sessionFactory, StateManager stateManager, ComponentLog log) throws IOException {
     BsonTimestamp bts = new BsonTimestamp((int) (lastOplogTimestamp), 0);
     logger.info("Set cursor timestamp to {}", String.valueOf(lastOplogTimestamp));
 
@@ -187,48 +191,55 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
       MongoCursor<Document> cursor = it.iterator();
       try {
         while(cursor.hasNext()){
+          ProcessSession session = sessionFactory.createSession();
           Document currentDoc = cursor.next();
+          Document oDoc = currentDoc.get("o", Document.class);
+          Integer ts = currentDoc.get("ts", BsonTimestamp.class).getTime();
           String[] namespace = currentDoc.getString("ns").split(Pattern.quote("."));
-          // If collection is not in white list
-          if(whiteListCollectionNames != null && !whiteListCollectionNames.contains(namespace[1])) {
-            continue;
-          }
+
           if(dbName.equals(namespace[0])) {
-            FlowFile flowFile = session.create();
-            Document oDoc = currentDoc.get("o", Document.class);
-
-            String h = Long.toString(currentDoc.getLong("h"));
-            flowFile = session.putAttribute(flowFile, "mime.type", "application/json");
-            flowFile = session.putAttribute(flowFile, "mongo.id", getId(currentDoc));
-            flowFile = session.putAttribute(flowFile, "mongo.ts", currentDoc.get("ts", BsonTimestamp.class).toString());
-            flowFile = session.putAttribute(flowFile, "mongo.op", currentDoc.getString("op"));
-            flowFile = session.putAttribute(flowFile, "mongo.db", dbName);
-            flowFile = session.putAttribute(flowFile, "mongo.collection", namespace[1]);
-
-            // Add additional data to oplog record
-            JSONObject record = new JSONObject();
-            record.put("collection", namespace[1]);
-            record.put("db", dbName);
-            record.put("ts", currentDoc.get("ts", BsonTimestamp.class).getTime());
-            record.put("op", currentDoc.getString("op"));
-            record.put("_id", getId(currentDoc));
-            record.put("changes", oDoc.toJson().toString());
-
-            logger.info(record.toString());
-            lastOplogTimestamp = currentDoc.get("ts", BsonTimestamp.class).getTime();
-            logger.info("Read oplog entry timestamp: {}", String.valueOf(lastOplogTimestamp));
-            saveCheckPoint(stateManager);
-
-            flowFile = session.write(flowFile, new OutputStreamCallback() {
-              @Override
-              public void process(OutputStream outputStream) throws IOException {
-                IOUtils.write(record.toString(), outputStream);
+            // If collection is in white list
+            if(whiteListCollectionNames == null || whiteListCollectionNames.contains(namespace[1])) {
+              FlowFile flowFile = session.get();
+              if (flowFile == null) {
+                flowFile = session.create();
               }
-            });
-            session.getProvenanceReporter().receive(flowFile, mongoWrapper.getURI(context));
-            session.transfer(flowFile, REL_SUCCESS);
-            session.commit();
+              
+              // Will be visible as attributes each data provenance record at Attributes tab of data provenance viewer
+              String h = Long.toString(currentDoc.getLong("h"));
+              flowFile = session.putAttribute(flowFile, "mime.type", "application/json");
+              flowFile = session.putAttribute(flowFile, "mongo.id", getId(currentDoc));
+              flowFile = session.putAttribute(flowFile, "mongo.ts", currentDoc.get("ts", BsonTimestamp.class).toString());
+              flowFile = session.putAttribute(flowFile, "mongo.op", currentDoc.getString("op"));
+              flowFile = session.putAttribute(flowFile, "mongo.db", dbName);
+              flowFile = session.putAttribute(flowFile, "mongo.collection", namespace[1]);
+
+              // Add additional data to oplog record
+              JSONObject record = new JSONObject();
+              record.put("collection", namespace[1]);
+              record.put("db", dbName);
+              record.put("ts", ts);
+              record.put("op", currentDoc.getString("op"));
+              record.put("_id", getId(currentDoc));
+              record.put("changes", oDoc.toJson().toString());
+
+              flowFile = session.write(flowFile, new OutputStreamCallback() {
+                @Override
+                public void process(OutputStream outputStream) throws IOException {
+                  IOUtils.write(record.toString(), outputStream);
+                }
+              });
+              session.getProvenanceReporter().receive(flowFile, mongoWrapper.getURI(context));
+              session.transfer(flowFile, REL_SUCCESS);
+              session.commit();
+
+              logger.info("Record has been read: {}", record.toString());
+            }
           }
+
+          lastOplogTimestamp = ts;
+          logger.info("Timestamp of last read record: {}", String.valueOf(lastOplogTimestamp));
+          saveCheckPoint(stateManager);
         }
       } finally {
         cursor.close();
@@ -249,14 +260,14 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
   protected void stop(StateManager stateManager) {
     try {
-        closeClient();
-        doStop.set(true);
+      mongoWrapper.closeClient();
+      doStop.set(true);
 
-        if (hasRun.getAndSet(false)) {
-            updateState(stateManager, lastOplogTimestamp);
-        }
+      if (hasRun.getAndSet(false)) {
+        updateState(stateManager, lastOplogTimestamp);
+      }
     } catch (Throwable t) {
-        getLogger().error("Error closing CDC connection", t);
+      getLogger().error("Error closing CDC connection", t);
     }
   }
 
