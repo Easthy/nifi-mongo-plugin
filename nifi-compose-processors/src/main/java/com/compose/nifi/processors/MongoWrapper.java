@@ -102,6 +102,13 @@ class MongoWrapper {
           .addValidator(Validator.VALID)
           .build();
 
+  private static final PropertyDescriptor START_TIMESTAMP = new PropertyDescriptor.Builder()
+          .name("Oplog start timestamp")
+          .description("Timestamp from which oplog will be read. If not specified: read from latest oplog entry in case of there is no saved checkpoint, then read from timestamp of saved checkpoint. If specified: read from specified timestamp, then read from timestamp of saved checkpoint. Example: 1569837112 (Mon Sep 30 2019 12:51:52 GMT+0300). To clear saved checkpoint: right click processor -> view state -> clear state")
+          .required(false)
+          .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
+          .build();
+
   public static final PropertyDescriptor STATE_UPDATE_INTERVAL = new PropertyDescriptor.Builder()
           .name("capture-change-mongo-state-update-interval")
           .displayName("State Update Interval")
@@ -158,6 +165,7 @@ class MongoWrapper {
     descriptors.add(USERNAME);
     descriptors.add(PASSWORD);
     descriptors.add(WHITE_LIST_COLLECTION_NAMES);
+    descriptors.add(START_TIMESTAMP);
     descriptors.add(STATE_UPDATE_INTERVAL);
     descriptors.add(SSL_CONTEXT_SERVICE);
     descriptors.add(CLIENT_AUTH);
@@ -170,6 +178,14 @@ class MongoWrapper {
     builder.sslEnabled(true);
     builder.socketFactory(sslContext.getSocketFactory());
     return builder;
+  }
+
+  public Integer getStartTimestamp(final ProcessContext context) {
+    String StartTimestamp = context.getProperty(START_TIMESTAMP).getValue();
+    if (StartTimestamp != null) {
+      return Integer.parseInt(StartTimestamp);
+    }
+    return null;
   }
 
   public Long getStateUpdateInterval(final ProcessContext context) {
@@ -219,6 +235,14 @@ class MongoWrapper {
 
   public String getURI(final ProcessContext context) {
     return context.getProperty(URI).getValue();
+  }
+
+  public String composeURI(final ProcessContext context) {
+    String mongoURI = getURI(context);
+    if (mongoURI == null) {
+      mongoURI = "mongodb://" + context.getProperty(MONGO_HOST).getValue().trim();
+    }
+    return mongoURI;
   }
 
   public ArrayList getWhiteListCollectionNames(final ProcessContext context) {

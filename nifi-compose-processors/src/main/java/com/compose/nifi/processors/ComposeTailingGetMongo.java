@@ -118,19 +118,23 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
     stateUpdateInterval = mongoWrapper.getStateUpdateInterval(context);
     
+    // Set oplog start timestamp. Ignored if state has lastOplogTimestamp 
+    final Integer startTimestamp = mongoWrapper.getStartTimestamp(context);
+    if (startTimestamp != null) {
+      lastOplogTimestamp = startTimestamp;
+      logger.info("Setting read oplog entry timestamp with start timestamp property: {}", String.valueOf(lastOplogTimestamp));
+    }
+    
     // Set current oplog timestamp to whatever is in State, falling back to the Retrieve All Records then Initial Oplog Timestamp if no State variable is present
     if (stateMap.get("lastOplogTimestamp") != null) {
       lastOplogTimestamp = Long.parseLong(stateMap.get("lastOplogTimestamp"));
-      logger.info("Find last read oplog entry timestamp: {}", String.valueOf(lastOplogTimestamp));
+      logger.info("Processor's state has last read oplog timestamp: {}. Start timestamp is ignored", String.valueOf(lastOplogTimestamp));
     }
-    // long ts = new Date().getTime();
-    // lastOplogTimestamp = ts;
-    // updateState(stateManager, lastOplogTimestamp);
 
     if (lastOplogTimestamp == 0L) {
         MongoCollection<Document> oplog = mongoWrapper.getLocalDatabase().getCollection("oplog.rs");
         lastOplogTimestamp = oplog.find().sort(new Document("$natural", -1)).limit(1).first().get("ts", BsonTimestamp.class).getTime() ; // Obtain the current position of the oplog; may be null
-        logger.info("Last read oplog entry timestamp not found, setting to last oplog entry timestamp: {}", String.valueOf(lastOplogTimestamp));
+        logger.info("Processor's state has no last read oplog entry timestamp, setting to last oplog entry timestamp: {}", String.valueOf(lastOplogTimestamp));
     }
   }
 
@@ -229,7 +233,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
                   IOUtils.write(record.toString(), outputStream);
                 }
               });
-              session.getProvenanceReporter().receive(flowFile, mongoWrapper.getURI(context));
+              session.getProvenanceReporter().receive(flowFile, mongoWrapper.composeURI(context));
               session.transfer(flowFile, REL_SUCCESS);
               session.commit();
 
@@ -238,7 +242,6 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
           }
 
           lastOplogTimestamp = ts;
-          logger.info("Timestamp of last read record: {}", String.valueOf(lastOplogTimestamp));
           saveCheckPoint(stateManager);
         }
       } finally {
