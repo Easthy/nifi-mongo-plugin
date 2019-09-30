@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
 
 import static com.mongodb.client.model.Filters.*;
 
-import org.json.simple.JSONObject;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -173,7 +173,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
       long timeSinceLastUpdate = now - lastStateUpdate;
 
       if (stateUpdateInterval != 0 && timeSinceLastUpdate >= stateUpdateInterval) {
-        logger.info("Saving new check point with timestamp: {}", String.valueOf(lastOplogTimestamp));
+        logger.info("Saving new check point with timestamp {} at processor's state", String.valueOf(lastOplogTimestamp));
         updateState(stateManager, lastOplogTimestamp);
         lastStateUpdate = now;
       }
@@ -181,7 +181,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
   public void outputEvents(final ProcessContext context, ProcessSessionFactory sessionFactory, StateManager stateManager, ComponentLog log) throws IOException {
     BsonTimestamp bts = new BsonTimestamp((int) (lastOplogTimestamp), 0);
-    logger.info("Set cursor timestamp to {}", String.valueOf(lastOplogTimestamp));
+    logger.info("Set mongodb cursor timestamp to {}", String.valueOf(lastOplogTimestamp));
 
     String dbName = mongoWrapper.getDatabase(context).getName();
     MongoIterable<String> collectionNames = mongoWrapper.getDatabase(context).listCollectionNames();
@@ -225,7 +225,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
               record.put("ts", ts);
               record.put("op", currentDoc.getString("op"));
               record.put("_id", getId(currentDoc));
-              record.put("changes", oDoc.toJson().toString());
+              record.put("changes", new JSONObject(oDoc.toJson()));
 
               flowFile = session.write(flowFile, new OutputStreamCallback() {
                 @Override
@@ -237,7 +237,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
               session.transfer(flowFile, REL_SUCCESS);
               session.commit();
 
-              logger.info("Record has been read: {}", record.toString());
+              logger.debug("Record has been read: {}", record.toString());
             }
           }
 
