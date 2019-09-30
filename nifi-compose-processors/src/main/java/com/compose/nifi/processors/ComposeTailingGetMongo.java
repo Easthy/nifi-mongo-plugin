@@ -220,12 +220,26 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
               // Add additional data to oplog record
               JSONObject record = new JSONObject();
+              JSONObject changes = new JSONObject(oDoc.toJson());
+              String op = currentDoc.getString("op");
+              changes.put("_id", getId(currentDoc));
+              
+              if (op.equals("u")) {
+                JSONObject upj = changes.getJSONObject("$set");
+                Iterator<String> keyItr = upj.keys();
+
+                while (keyItr.hasNext()) {
+                  String key = keyItr.next();
+                  changes.put(key, upj.get(key));
+                }
+                changes.remove("$set");
+              }
+              changes.put("ts", ts);
+
               record.put("collection", namespace[1]);
               record.put("db", dbName);
-              record.put("ts", ts);
-              record.put("op", currentDoc.getString("op"));
-              record.put("_id", getId(currentDoc));
-              record.put("changes", new JSONObject(oDoc.toJson()));
+              record.put("op", op);
+              record.put("changes", changes);
 
               flowFile = session.write(flowFile, new OutputStreamCallback() {
                 @Override
