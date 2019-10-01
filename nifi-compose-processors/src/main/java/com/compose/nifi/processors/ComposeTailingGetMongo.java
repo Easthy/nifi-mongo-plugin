@@ -31,8 +31,6 @@ import java.util.regex.Pattern;
 import static com.mongodb.client.model.Filters.*;
 
 import org.json.JSONObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.apache.nifi.components.state.StateManager;
 import org.apache.nifi.components.state.StateMap;
@@ -60,7 +58,6 @@ import org.apache.nifi.processor.exception.ProcessException;
 @Stateful(scopes = Scope.CLUSTER, description = "Information such as a 'pointer' to the current CDC event in the database is stored by this processor, such "
         + "that it can continue from the same location if restarted.")
 public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
-  private static final Logger logger = LoggerFactory.getLogger(ComposeTailingGetMongo.class);
   private static final Relationship REL_SUCCESS = new Relationship.Builder()
                   .name("success")
                   .description("Successfully created FlowFile from oplog.")
@@ -103,6 +100,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
   public final void createClient(ProcessContext context) throws IOException {
     final StateManager stateManager = context.getStateManager();
     final StateMap stateMap;
+    final ComponentLog logger = getLogger();
 
     try {
         stateMap = stateManager.getState(Scope.CLUSTER);
@@ -122,19 +120,19 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
     final Integer startTimestamp = mongoWrapper.getStartTimestamp(context);
     if (startTimestamp != null) {
       lastOplogTimestamp = startTimestamp;
-      logger.info("Setting read oplog entry timestamp with start timestamp property: {}", String.valueOf(lastOplogTimestamp));
+      logger.info("Setting read oplog entry timestamp with start timestamp property: " + String.valueOf(lastOplogTimestamp));
     }
     
     // Set current oplog timestamp to whatever is in State, falling back to the Retrieve All Records then Initial Oplog Timestamp if no State variable is present
     if (stateMap.get("lastOplogTimestamp") != null) {
       lastOplogTimestamp = Long.parseLong(stateMap.get("lastOplogTimestamp"));
-      logger.info("Processor's state has last read oplog timestamp: {}. Start timestamp is ignored", String.valueOf(lastOplogTimestamp));
+      logger.info("Processor's state has last read oplog timestamp: " + String.valueOf(lastOplogTimestamp) + ". Start timestamp is ignored");
     }
 
     if (lastOplogTimestamp == 0L) {
         MongoCollection<Document> oplog = mongoWrapper.getLocalDatabase().getCollection("oplog.rs");
         lastOplogTimestamp = oplog.find().sort(new Document("$natural", -1)).limit(1).first().get("ts", BsonTimestamp.class).getTime() ; // Obtain the current position of the oplog; may be null
-        logger.info("Processor's state has no last read oplog entry timestamp, setting to last oplog entry timestamp: {}", String.valueOf(lastOplogTimestamp));
+        logger.info("Processor's state has no last read oplog entry timestamp, setting to last oplog entry timestamp: " + String.valueOf(lastOplogTimestamp));
     }
   }
 
@@ -147,41 +145,37 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
   @Override
   public final void onTrigger(final ProcessContext context, final ProcessSessionFactory sessionFactory) {
     hasRun.set(true);
-    ComponentLog log = getLogger();
+    ComponentLog logger = getLogger();
     StateManager stateManager = context.getStateManager();
 
-    // if (currentSession == null) {
-    //   currentSession = sessionFactory.createSession();
-    // }
-
     try {
-      outputEvents(context, sessionFactory, stateManager, log);
+      outputEvents(context, sessionFactory, stateManager, logger);
     } catch (IOException ioe) {
       try {
         stop(stateManager);
         currentSession.rollback();
       } catch (Exception e) {
         // Not much we can recover from here
-        log.warn("Error occurred during rollback", e);
+        logger.warn("Error occurred during rollback", e);
       }
       throw new ProcessException(ioe);
     }
   }
 
-  public final void saveCheckPoint(StateManager stateManager) throws IOException{
+  public final void saveCheckPoint(StateManager stateManager, ComponentLog logger) throws IOException{
       long now = System.currentTimeMillis();
       long timeSinceLastUpdate = now - lastStateUpdate;
 
       if (stateUpdateInterval != 0 && timeSinceLastUpdate >= stateUpdateInterval) {
-        logger.info("Saving new check point with timestamp {} at processor's state", String.valueOf(lastOplogTimestamp));
+        logger.info("Saving new check point with timestamp " + String.valueOf(lastOplogTimestamp) + " at processor's state");
         updateState(stateManager, lastOplogTimestamp);
         lastStateUpdate = now;
       }
   }
 
-  public void outputEvents(final ProcessContext context, ProcessSessionFactory sessionFactory, StateManager stateManager, ComponentLog log) throws IOException {
+  public void outputEvents(final ProcessContext context, ProcessSessionFactory sessionFactory, StateManager stateManager, ComponentLog logger) throws IOException {
     BsonTimestamp bts = new BsonTimestamp((int) (lastOplogTimestamp), 0);
-    logger.info("Set mongodb cursor timestamp to {}", String.valueOf(lastOplogTimestamp));
+    logger.info("Set mongodb cursor timestamp to " + String.valueOf(lastOplogTimestamp));
 
     String dbName = mongoWrapper.getDatabase(context).getName();
     MongoIterable<String> collectionNames = mongoWrapper.getDatabase(context).listCollectionNames();
@@ -223,7 +217,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
               JSONObject changes = new JSONObject(oDoc.toJson());
               String op = currentDoc.getString("op");
               changes.put("_id", getId(currentDoc));
-              
+
               if (op.equals("u")) {
                 JSONObject upj = changes.getJSONObject("$set");
                 Iterator<String> keyItr = upj.keys();
@@ -251,12 +245,12 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
               session.transfer(flowFile, REL_SUCCESS);
               session.commit();
 
-              logger.debug("Record has been read: {}", record.toString());
+              logger.debug("Record has been read: " + record.toString());
             }
           }
 
           lastOplogTimestamp = ts;
-          saveCheckPoint(stateManager);
+          saveCheckPoint(stateManager, logger);
         }
       } finally {
         cursor.close();
