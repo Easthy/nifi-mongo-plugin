@@ -15,6 +15,7 @@ import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.lifecycle.OnScheduled;
 import org.apache.nifi.annotation.lifecycle.OnStopped;
+import org.apache.nifi.annotation.lifecycle.OnShutdown;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processor.*;
@@ -101,6 +102,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
     final StateManager stateManager = context.getStateManager();
     final StateMap stateMap;
     final ComponentLog logger = getLogger();
+    doStop.set(false);
 
     try {
         stateMap = stateManager.getState(Scope.CLUSTER);
@@ -138,8 +140,29 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
   @OnStopped
   public final void closeClient(ProcessContext context) {
-    StateManager stateManager = context.getStateManager();
-    stop(stateManager);
+    getLogger().info("Shutting down on stopped...");
+    stop(context.getStateManager());
+  }
+
+  protected void stop(StateManager stateManager) {
+    try {
+      getLogger().info("Closing client...");
+      mongoWrapper.closeClient();
+      doStop.set(true);
+
+      if (hasRun.getAndSet(false)) {
+        updateState(stateManager, lastOplogTimestamp);
+      }
+    } catch (Throwable t) {
+      getLogger().error("Error closing CDC connection", t);
+    }
+  }
+
+  @OnShutdown
+  public void onShutdown(ProcessContext context) {
+    getLogger().info("Shutting down on shutdown...");
+    // In case we get shutdown while still running, save off the current state, disconnect, and shut down gracefully
+    stop(context.getStateManager());
   }
 
   @Override
@@ -174,8 +197,8 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
   }
 
   public void outputEvents(final ProcessContext context, ProcessSessionFactory sessionFactory, StateManager stateManager, ComponentLog logger) throws IOException {
-    BsonTimestamp bts = new BsonTimestamp((int) (lastOplogTimestamp), 0);
-    logger.info("Set mongodb cursor timestamp to " + String.valueOf(lastOplogTimestamp));
+    BsonTimestamp bts = new BsonTimestamp((int) (lastOplogTimestamp), 1);
+    logger.debug("Set mongodb cursor timestamp to " + String.valueOf(lastOplogTimestamp));
 
     String dbName = mongoWrapper.getDatabase(context).getName();
     MongoIterable<String> collectionNames = mongoWrapper.getDatabase(context).listCollectionNames();
@@ -185,12 +208,17 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
     MongoCollection<Document> oplog = mongoWrapper.getLocalDatabase().getCollection("oplog.rs");
     try {
-      FindIterable<Document> it = oplog.find(gt("ts", bts)).cursorType(CursorType.TailableAwait).oplogReplay(true).noCursorTimeout(true);
-      MongoCursor<Document> cursor = it.iterator();
+      MongoCursor<Document> cursor = oplog.find(gt("ts", bts)) // start just after our last position
+                                        .cursorType(CursorType.NonTailable) // tail and await new data
+                                        .oplogReplay(false) // if true - tells Mongo to not rely on indexes (may be helpfull ob big collection, queried by indexed field)
+                                        .noCursorTimeout(true)
+                                        .batchSize(1000)
+                                        .iterator();
       try {
-        while(cursor.hasNext()){
+        while(!doStop.get() && cursor.hasNext()){
           ProcessSession session = sessionFactory.createSession();
           Document currentDoc = cursor.next();
+
           Document oDoc = currentDoc.get("o", Document.class);
           Integer ts = currentDoc.get("ts", BsonTimestamp.class).getTime();
           String[] namespace = currentDoc.getString("ns").split(Pattern.quote("."));
@@ -267,19 +295,6 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
           newStateMap.put("lastOplogTimestamp", Long.toString(lastOplogTimestamp));
           stateManager.setState(newStateMap, Scope.CLUSTER);
       }
-  }
-
-  protected void stop(StateManager stateManager) {
-    try {
-      mongoWrapper.closeClient();
-      doStop.set(true);
-
-      if (hasRun.getAndSet(false)) {
-        updateState(stateManager, lastOplogTimestamp);
-      }
-    } catch (Throwable t) {
-      getLogger().error("Error closing CDC connection", t);
-    }
   }
 
   private String getId(Document doc) {

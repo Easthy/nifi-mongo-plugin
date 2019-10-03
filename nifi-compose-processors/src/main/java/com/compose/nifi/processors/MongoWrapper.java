@@ -25,9 +25,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.concurrent.TimeUnit;
 import org.apache.nifi.expression.ExpressionLanguageScope;
 
@@ -35,7 +32,6 @@ import org.apache.nifi.expression.ExpressionLanguageScope;
  * Created on 09.2019.
  */
 class MongoWrapper {
-  private static final Logger logger = LoggerFactory.getLogger(MongoWrapper.class);
   static final String WRITE_CONCERN_ACKNOWLEDGED = "ACKNOWLEDGED";
   static final String WRITE_CONCERN_UNACKNOWLEDGED = "UNACKNOWLEDGED";
   static final String WRITE_CONCERN_JOURNALED = "JOURNALED";
@@ -311,6 +307,13 @@ class MongoWrapper {
     }
   }
 
+  public final Boolean mongoClientExists() {
+    if (mongoClient != null) {
+      return true;
+    }
+    return false;
+  }
+
   public final void closeClient() {
     if (mongoClient != null) {
       mongoClient.close();
@@ -348,5 +351,4 @@ class MongoWrapper {
     }
     return writeConcern;
   }
-
 }
