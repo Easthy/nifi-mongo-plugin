@@ -32,13 +32,6 @@ import org.apache.nifi.expression.ExpressionLanguageScope;
  * Created on 09.2019.
  */
 class MongoWrapper {
-  static final String WRITE_CONCERN_ACKNOWLEDGED = "ACKNOWLEDGED";
-  static final String WRITE_CONCERN_UNACKNOWLEDGED = "UNACKNOWLEDGED";
-  static final String WRITE_CONCERN_JOURNALED = "JOURNALED";
-  static final String WRITE_CONCERN_MAJORITY = "MAJORITY";
-  static final String W1 = "W1";
-  static final String W2 = "W2";
-  static final String W3 = "W3";
   static final String SEPARATED = "Separate mongodb params";
   static final String SINGLE = "Single connection string";
 
@@ -54,9 +47,9 @@ class MongoWrapper {
           .required(true)
           .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
           .build();
-  public static final AllowableValue CONNECTION_STRING = new AllowableValue(SINGLE, "Single connection string",
+  public static final AllowableValue CONNECTION_STRING = new AllowableValue(SINGLE, "Single connection string ⇧",
           "Mongo connection string (URI) will be used to establish connection");
-  public static final AllowableValue SEPARATED_PARAMS = new AllowableValue(SEPARATED, "Separate mongodb params",
+  public static final AllowableValue SEPARATED_PARAMS = new AllowableValue(SEPARATED, "Separate mongodb params ⇩",
           "Separated fields with mongo params values will be used to establish connection");
   public static final PropertyDescriptor CONNECTION_SOURCE = new PropertyDescriptor.Builder()
           .name("Connection string / separate mongo params")
@@ -136,19 +129,8 @@ class MongoWrapper {
           .defaultValue("REQUIRED")
           .build();
 
-  public static final PropertyDescriptor WRITE_CONCERN = new PropertyDescriptor.Builder()
-        .name("Write Concern")
-        .description("The write concern to use")
-        .required(true)
-        .allowableValues(WRITE_CONCERN_ACKNOWLEDGED, WRITE_CONCERN_UNACKNOWLEDGED,
-                WRITE_CONCERN_JOURNALED, WRITE_CONCERN_MAJORITY,
-                W1, W2, W3)
-        .defaultValue(WRITE_CONCERN_ACKNOWLEDGED)
-        .build();
-
   private final static String SYSTEM_INDEXES = "system.indexes";
   static final Pattern systemIndexesPattern = Pattern.compile(SYSTEM_INDEXES);
-
 
   static List<PropertyDescriptor> descriptors = new ArrayList<>();
 
@@ -317,36 +299,5 @@ class MongoWrapper {
       mongoClient.close();
       mongoClient = null;
     }
-  }
-
-  protected WriteConcern getWriteConcern(final ProcessContext context) {
-    final String writeConcernProperty = context.getProperty(WRITE_CONCERN).getValue();
-    WriteConcern writeConcern = null;
-    switch (writeConcernProperty) {
-      case WRITE_CONCERN_ACKNOWLEDGED:
-        writeConcern = WriteConcern.ACKNOWLEDGED;
-        break;
-      case WRITE_CONCERN_UNACKNOWLEDGED:
-        writeConcern = WriteConcern.UNACKNOWLEDGED;
-        break;
-      case WRITE_CONCERN_JOURNALED:
-        writeConcern = WriteConcern.JOURNALED;
-        break;
-      case WRITE_CONCERN_MAJORITY:
-        writeConcern = WriteConcern.MAJORITY;
-        break;
-      case W1:
-        writeConcern = WriteConcern.W1;
-        break;
-      case W2:
-        writeConcern = WriteConcern.W2;
-        break;
-      case W3:
-        writeConcern = WriteConcern.W3;
-        break;
-      default:
-        writeConcern = WriteConcern.ACKNOWLEDGED;
-    }
-    return writeConcern;
   }
 }

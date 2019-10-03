@@ -147,9 +147,9 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
   protected void stop(StateManager stateManager) {
     try {
       getLogger().info("Closing client...");
-      mongoWrapper.closeClient();
       doStop.set(true);
-
+      mongoWrapper.closeClient();
+      
       if (hasRun.getAndSet(false)) {
         updateState(stateManager, lastOplogTimestamp);
       }
@@ -171,8 +171,12 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
     ComponentLog logger = getLogger();
     StateManager stateManager = context.getStateManager();
 
+    if (currentSession == null) {
+        currentSession = sessionFactory.createSession();
+    }
+
     try {
-      outputEvents(context, sessionFactory, stateManager, logger);
+      outputEvents(context, currentSession, stateManager, logger);
     } catch (IOException ioe) {
       try {
         stop(stateManager);
@@ -196,11 +200,65 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
       }
   }
 
-  public void outputEvents(final ProcessContext context, ProcessSessionFactory sessionFactory, StateManager stateManager, ComponentLog logger) throws IOException {
+  private final void writeEvent(final ProcessSession session, Document currentDoc, String db, String collection, String transitUri) {
+    FlowFile flowFile = session.get();
+    if (flowFile == null) {
+      flowFile = session.create();
+    }
+     
+    Integer ts = currentDoc.get("ts", BsonTimestamp.class).getTime();
+    Document oDoc = currentDoc.get("o", Document.class);
+    // Will be visible as attributes each data provenance record at Attributes tab of data provenance viewer
+    String h = Long.toString(currentDoc.getLong("h"));
+    flowFile = session.putAttribute(flowFile, "mime.type", "application/json");
+    flowFile = session.putAttribute(flowFile, "mongo.id", getId(currentDoc));
+    flowFile = session.putAttribute(flowFile, "mongo.ts", currentDoc.get("ts", BsonTimestamp.class).toString());
+    flowFile = session.putAttribute(flowFile, "mongo.op", currentDoc.getString("op"));
+    flowFile = session.putAttribute(flowFile, "mongo.db", db);
+    flowFile = session.putAttribute(flowFile, "mongo.collection", collection);
+
+    // Add additional data to oplog record
+    JSONObject record = new JSONObject();
+    JSONObject changes = new JSONObject(oDoc.toJson());
+    String op = currentDoc.getString("op");
+    changes.put("_id", getId(currentDoc));
+
+    if (op.equals("u")) {
+      JSONObject upj = changes.getJSONObject("$set");
+      Iterator<String> keyItr = upj.keys();
+      while (keyItr.hasNext()) {
+        String key = keyItr.next();
+        changes.put(key, upj.get(key));
+      }
+      changes.remove("$set");
+    }
+    changes.put("ts", ts);
+
+    record.put("collection", collection);
+    record.put("db", db);
+    record.put("op", op);
+    record.put("changes", changes);
+
+    flowFile = session.write(flowFile, new OutputStreamCallback() {
+      @Override
+      public void process(OutputStream outputStream) throws IOException {
+        IOUtils.write(record.toString(), outputStream);
+      }
+    });
+
+    session.getProvenanceReporter().receive(flowFile, transitUri);
+    session.transfer(flowFile, REL_SUCCESS);
+    session.commit();
+
+    getLogger().debug("Record has been read: " + record.toString());
+  }
+  
+  public void outputEvents(final ProcessContext context, ProcessSession session, StateManager stateManager, ComponentLog logger) throws IOException {
     BsonTimestamp bts = new BsonTimestamp((int) (lastOplogTimestamp), 1);
     logger.debug("Set mongodb cursor timestamp to " + String.valueOf(lastOplogTimestamp));
 
-    String dbName = mongoWrapper.getDatabase(context).getName();
+    String db = mongoWrapper.getDatabase(context).getName();
+    String transitUri = mongoWrapper.composeURI(context);
     MongoIterable<String> collectionNames = mongoWrapper.getDatabase(context).listCollectionNames();
 
     // Filter by white list collections
@@ -209,71 +267,24 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
     MongoCollection<Document> oplog = mongoWrapper.getLocalDatabase().getCollection("oplog.rs");
     try {
       MongoCursor<Document> cursor = oplog.find(gt("ts", bts)) // start just after our last position
-                                        .cursorType(CursorType.NonTailable) // tail and await new data
+                                        .cursorType(CursorType.NonTailable) // TailableAwait == tail and await new data
                                         .oplogReplay(false) // if true - tells Mongo to not rely on indexes (may be helpfull ob big collection, queried by indexed field)
                                         .noCursorTimeout(true)
                                         .batchSize(1000)
                                         .iterator();
       try {
         while(!doStop.get() && cursor.hasNext()){
-          ProcessSession session = sessionFactory.createSession();
           Document currentDoc = cursor.next();
 
-          Document oDoc = currentDoc.get("o", Document.class);
           Integer ts = currentDoc.get("ts", BsonTimestamp.class).getTime();
           String[] namespace = currentDoc.getString("ns").split(Pattern.quote("."));
+          String op = currentDoc.getString("op");
 
-          if(dbName.equals(namespace[0])) {
+          if(db.equals(namespace[0])) {
             // If collection is in white list
             if(whiteListCollectionNames == null || whiteListCollectionNames.contains(namespace[1])) {
-              FlowFile flowFile = session.get();
-              if (flowFile == null) {
-                flowFile = session.create();
-              }
-              
-              // Will be visible as attributes each data provenance record at Attributes tab of data provenance viewer
-              String h = Long.toString(currentDoc.getLong("h"));
-              flowFile = session.putAttribute(flowFile, "mime.type", "application/json");
-              flowFile = session.putAttribute(flowFile, "mongo.id", getId(currentDoc));
-              flowFile = session.putAttribute(flowFile, "mongo.ts", currentDoc.get("ts", BsonTimestamp.class).toString());
-              flowFile = session.putAttribute(flowFile, "mongo.op", currentDoc.getString("op"));
-              flowFile = session.putAttribute(flowFile, "mongo.db", dbName);
-              flowFile = session.putAttribute(flowFile, "mongo.collection", namespace[1]);
-
-              // Add additional data to oplog record
-              JSONObject record = new JSONObject();
-              JSONObject changes = new JSONObject(oDoc.toJson());
-              String op = currentDoc.getString("op");
-              changes.put("_id", getId(currentDoc));
-
-              if (op.equals("u")) {
-                JSONObject upj = changes.getJSONObject("$set");
-                Iterator<String> keyItr = upj.keys();
-
-                while (keyItr.hasNext()) {
-                  String key = keyItr.next();
-                  changes.put(key, upj.get(key));
-                }
-                changes.remove("$set");
-              }
-              changes.put("ts", ts);
-
-              record.put("collection", namespace[1]);
-              record.put("db", dbName);
-              record.put("op", op);
-              record.put("changes", changes);
-
-              flowFile = session.write(flowFile, new OutputStreamCallback() {
-                @Override
-                public void process(OutputStream outputStream) throws IOException {
-                  IOUtils.write(record.toString(), outputStream);
-                }
-              });
-              session.getProvenanceReporter().receive(flowFile, mongoWrapper.composeURI(context));
-              session.transfer(flowFile, REL_SUCCESS);
-              session.commit();
-
-              logger.debug("Record has been read: " + record.toString());
+              // Write data into flowFile
+              writeEvent(session, currentDoc, db, namespace[1], transitUri);
             }
           }
 
