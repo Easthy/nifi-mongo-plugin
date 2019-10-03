@@ -66,8 +66,8 @@ class MongoWrapper {
           .addValidator(Validator.VALID)
           .build();
   private static final PropertyDescriptor MONGO_HOST = new PropertyDescriptor.Builder()
-          .name("Mongo host")
-          .description("Mongo host. Use either URI, either host value of the form: host:port")
+          .name("Mongo Replica Set")
+          .description("Mongo host. Use either URI, either replica set value of the form: host1:port1, host2:port2, host3:port3")
           .required(false)
           .addValidator(Validator.VALID)
           .build();
@@ -192,12 +192,18 @@ class MongoWrapper {
     return context.getProperty(CONNECTION_SOURCE).getValue();
   }
 
-  public String[] getMongoHost(final ProcessContext context) {
-    final String[] mongoHost = context.getProperty(MONGO_HOST).getValue().trim().split(":");
-    if (mongoHost.length != 2) {
-      throw new ArrayIndexOutOfBoundsException("Not in host:port format");
+  public ArrayList<ServerAddress> getMongoHost(final ProcessContext context) {
+    final String[] mongoHost = context.getProperty(MONGO_HOST).getValue().trim().split("\\s*,\\s*");
+
+    ArrayList<ServerAddress> mongoServers = new ArrayList<ServerAddress>();
+    for (String s: mongoHost) {           
+      String[] host = s.split(":");
+      if (host.length != 2) {
+        throw new ArrayIndexOutOfBoundsException("Some of specified mongo host not in host:port format");
+      }
+      mongoServers.add(new ServerAddress(host[0], Integer.parseInt(host[1])));
     }
-    return mongoHost;
+    return mongoServers;
   }
 
   public String getDatabaseName(final ProcessContext context) {
@@ -291,10 +297,9 @@ class MongoWrapper {
           if (authSource != null){
             database = authSource;
           }
-          String[] mongoHost = this.getMongoHost(context);
+          List<ServerAddress> mongoHost = this.getMongoHost(context);
           MongoCredential credential = MongoCredential.createCredential(username, database, password);
-          mongoClient = new MongoClient(new ServerAddress(mongoHost[0], 
-                                                          Integer.parseInt(mongoHost[1])), 
+          mongoClient = new MongoClient(mongoHost, 
                                         Arrays.asList(credential));
         } else {
           mongoClient = new MongoClient(new MongoClientURI(uri));
@@ -305,13 +310,6 @@ class MongoWrapper {
     } catch (Exception e) {
       throw e;
     }
-  }
-
-  public final Boolean mongoClientExists() {
-    if (mongoClient != null) {
-      return true;
-    }
-    return false;
   }
 
   public final void closeClient() {
