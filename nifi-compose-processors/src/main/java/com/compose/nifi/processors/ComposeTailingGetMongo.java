@@ -16,6 +16,7 @@ import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.lifecycle.OnScheduled;
 import org.apache.nifi.annotation.lifecycle.OnStopped;
 import org.apache.nifi.annotation.lifecycle.OnShutdown;
+import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processor.*;
@@ -165,6 +166,12 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
     stop(context.getStateManager());
   }
 
+  @OnUnscheduled
+  public void onUnscheduled(ProcessContext context) {
+    getLogger().info("Shutting down on unscheduled...");
+    doStop.set(true);
+  }
+
   @Override
   public final void onTrigger(final ProcessContext context, final ProcessSessionFactory sessionFactory) {
     hasRun.set(true);
@@ -267,13 +274,13 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
     MongoCollection<Document> oplog = mongoWrapper.getLocalDatabase().getCollection("oplog.rs");
     try {
       MongoCursor<Document> cursor = oplog.find(gt("ts", bts)) // start just after our last position
-                                        .cursorType(CursorType.NonTailable) // TailableAwait == tail and await new data
+                                        .cursorType(CursorType.TailableAwait) // TailableAwait == tail and await new data
                                         .oplogReplay(false) // if true - tells Mongo to not rely on indexes (may be helpfull ob big collection, queried by indexed field)
                                         .noCursorTimeout(true)
                                         .batchSize(1000)
                                         .iterator();
       try {
-        while(!doStop.get() && cursor.hasNext()){
+        while(!doStop.get()){
           Document currentDoc = cursor.next();
 
           Integer ts = currentDoc.get("ts", BsonTimestamp.class).getTime();
