@@ -168,7 +168,7 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
 
   @OnUnscheduled
   public void onUnscheduled(ProcessContext context) {
-    getLogger().info("Shutting down on unscheduled...");
+    getLogger().info("Setting doStop to true on unscheduled...");
     doStop.set(true);
   }
 
@@ -282,6 +282,9 @@ public class ComposeTailingGetMongo extends AbstractSessionFactoryProcessor {
       try {
         while(!doStop.get()){
           Document currentDoc = cursor.next();
+          if (doStop.get()) {
+            break;
+          }
 
           Integer ts = currentDoc.get("ts", BsonTimestamp.class).getTime();
           String[] namespace = currentDoc.getString("ns").split(Pattern.quote("."));
