@@ -1,11 +1,6 @@
 package com.compose.nifi.processors;
 
-import com.mongodb.MongoClient;
-import com.mongodb.MongoClientOptions;
-import com.mongodb.MongoClientURI;
-import com.mongodb.MongoCredential;
-import com.mongodb.ServerAddress;
-import com.mongodb.WriteConcern;
+import com.mongodb.*;
 import com.mongodb.client.MongoDatabase;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.authorization.exception.AuthorizerCreationException;
@@ -129,6 +124,41 @@ class MongoWrapper {
           .defaultValue("REQUIRED")
           .build();
 
+  private static final PropertyDescriptor CONNECTION_TIMEOUT_INTERVAL = new PropertyDescriptor.Builder()
+          .name("Connection timeout interval")
+          .description("The number of milliseconds the driver will wait before a new connection attempt is aborted. Default 15 000")
+          .required(false)
+          .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
+          .build();
+
+  private static final PropertyDescriptor SOCKET_TIMEOUT_INTERVAL = new PropertyDescriptor.Builder()
+          .name("Socket timeout interval")
+          .description("The number of milliseconds a send or receive on a socket can take before timeout. Default 5 000")
+          .required(false)
+          .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
+          .build();
+
+  private static final PropertyDescriptor SERVER_SELECTION_TIMEOUT_INTERVAL = new PropertyDescriptor.Builder()
+          .name("Server selection timeout interval")
+          .description("The number of milliseconds the mongo driver will wait to select a server for an operation before giving up and raising an error. Default 15 000")
+          .required(false)
+          .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
+          .build();
+
+  static final String SECONDARY = "secondary"; // ReadPreference.secondaryPreferred();
+  static final String PRIMARY = "primary"; //ReadPreference.primaryPreferred();
+  public static final AllowableValue SECONDARY_PREFFERED = new AllowableValue(SECONDARY, "Secondary preferred",
+          "Read oplog from slave");
+  public static final AllowableValue PRIMARY_PREFFERED = new AllowableValue(PRIMARY, "Primary preferred",
+          "Read oplog from master");
+  public static final PropertyDescriptor READ_PREFERENCE = new PropertyDescriptor.Builder()
+          .name("Oplog read preference")
+          .description("Choose the preferred server from MongoDB cluster to read oplog from. Secondary preferred by default")
+          .allowableValues(SECONDARY_PREFFERED, PRIMARY_PREFFERED)
+          .defaultValue(SECONDARY_PREFFERED.getValue())
+          .addValidator(Validator.VALID)
+          .build();
+
   private final static String SYSTEM_INDEXES = "system.indexes";
   static final Pattern systemIndexesPattern = Pattern.compile(SYSTEM_INDEXES);
 
@@ -147,15 +177,59 @@ class MongoWrapper {
     descriptors.add(STATE_UPDATE_INTERVAL);
     descriptors.add(SSL_CONTEXT_SERVICE);
     descriptors.add(CLIENT_AUTH);
+    descriptors.add(CONNECTION_TIMEOUT_INTERVAL);
+    descriptors.add(SOCKET_TIMEOUT_INTERVAL);
+    descriptors.add(SERVER_SELECTION_TIMEOUT_INTERVAL);
+    descriptors.add(READ_PREFERENCE);
   }
 
   private MongoClient mongoClient;
 
-  private MongoClientOptions.Builder getClientOptions(final SSLContext sslContext) {
+  private MongoClientOptions.Builder getSSLClientOptions(final SSLContext sslContext) {
     MongoClientOptions.Builder builder = MongoClientOptions.builder();
     builder.sslEnabled(true);
     builder.socketFactory(sslContext.getSocketFactory());
     return builder;
+  }
+
+  private MongoClientOptions getClientOptions(final ProcessContext context) {
+    MongoClientOptions.Builder builder = MongoClientOptions.builder();
+    builder.connectTimeout(this.getConnectionTimeoutInterval(context)).
+            socketTimeout(this.getSocketTimeoutInterval(context)).
+            serverSelectionTimeout(this.getServerSelectionTimeoutInterval(context)).
+            readPreference(this.getReadPreference(context));
+    return builder.build();
+  }
+
+  public ReadPreference getReadPreference(final ProcessContext context) {
+    if (context.getProperty(READ_PREFERENCE).getValue().equals(PRIMARY)){
+      return ReadPreference.primaryPreferred();
+    }
+    return ReadPreference.secondaryPreferred();
+  }
+
+  public Integer getConnectionTimeoutInterval(final ProcessContext context) {
+    String ConnectionTimeoutInterval = context.getProperty(CONNECTION_TIMEOUT_INTERVAL).getValue();
+    if (ConnectionTimeoutInterval != null) {
+      return Integer.parseInt(ConnectionTimeoutInterval);
+    }
+    return 15000;
+  }
+
+  public Integer getSocketTimeoutInterval(final ProcessContext context) {
+    String SocketTimeoutInterval = context.getProperty(SOCKET_TIMEOUT_INTERVAL).getValue();
+    if (SocketTimeoutInterval != null) {
+      return Integer.parseInt(SocketTimeoutInterval);
+    }
+    return 5000;
+  }
+
+  public Integer getServerSelectionTimeoutInterval(final ProcessContext context) {
+    String ServerSelectionTimeoutInterval = context.getProperty(SERVER_SELECTION_TIMEOUT_INTERVAL).getValue();
+    if (ServerSelectionTimeoutInterval != null) {
+      return Integer.parseInt(ServerSelectionTimeoutInterval);
+    }
+    return 15000;
   }
 
   public Integer getStartTimestamp(final ProcessContext context) {
@@ -282,12 +356,13 @@ class MongoWrapper {
           List<ServerAddress> mongoHost = this.getMongoHost(context);
           MongoCredential credential = MongoCredential.createCredential(username, database, password);
           mongoClient = new MongoClient(mongoHost, 
-                                        Arrays.asList(credential));
+                                        Arrays.asList(credential),
+                                        this.getClientOptions(context));
         } else {
           mongoClient = new MongoClient(new MongoClientURI(uri));
         }
       } else {
-        mongoClient = new MongoClient(new MongoClientURI(uri, getClientOptions(sslContext)));
+        mongoClient = new MongoClient(new MongoClientURI(uri, getSSLClientOptions(sslContext)));
       }
     } catch (Exception e) {
       throw e;
