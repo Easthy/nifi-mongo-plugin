@@ -4,7 +4,7 @@ Due to using tailable await cursor type, processor is not able to be stopped jus
   
 Read processor's fields description when configuring it.  
   
-![alt text](https://cdn1.imggmi.com/uploads/2019/10/24/0ae390108c6601332292e6466e55115c-full.png)
+![alt text](https://github.com/Easthy/nifi-mongo-plugin/blob/master/ProcessorScreenshot.png)
 
 
 #### Format of message
