@@ -1,6 +1,5 @@
 ### Description
-This is NiFI plugin for reading mongo oplog. It uses tailable await cursor type. This cursor type keeps connection open, so processor started and keeps working without exiting. If you change cursor type to non-tailable, you must save checkpoints after each received event (modify saveCheckPoint function) as outputEvents function sets cursor to lastOplogTimestamp when invoked (it is invoked in onTrigger function, which in turn is invoked once in interval, set at processor settings).  
-Due to using tailable await cursor type, processor is not able to be stopped just on clicking stop button as it awaits any new oplog entry to be received (stuck in onTrigger function).
+This is NiFI plugin for reading mongo oplog. It uses tailable await cursor type. This cursor type keeps connection open, so processor started and keeps working without exiting. If you change cursor type to non-tailable, you must save checkpoints after each received event (modify saveCheckPoint function) as outputEvents function sets cursor to lastOplogTimestamp when invoked (invoked at onTrigger function, which in turn is invoked once in interval, set at processor settings).  
   
 Read processor's fields description when configuring it.  
   
